@@ -1,0 +1,60 @@
+Within the elasticsearch directory:
+These are "official" river plugins that can be found by ES.
+
+ ./bin/plugin -install river-twitter
+ ./bin/plugin -install lang-javascript
+
+This one from a github.
+
+ ./bin/plugin -install dadoonet/rssriver/0.0.5
+
+
+
+http://news.google.com/news?ned=us&topic=w&output=rss
+
+n
+curl -XPUT 'http://localhost:9200/googlenews/' -d '{}'
+
+curl -XPUT 'http://localhost:9200/googlenews/page/_mapping' -d '{ \
+  "page" : { \
+    "properties" : { \
+      "title" : {"type" : "string"}, \
+      "description" : {"type" : "string"}, \
+      "author" : {"type" : "string"}, \
+      "link" : {"type" : "string"} \
+    } \
+  } \
+}'  
+
+curl -XPUT 'localhost:9200/_river/googlenews/_meta' -d '{ \
+  "type": "rss", \
+  "rss": { \
+    "feeds" : [ { \
+        "name": "googlenews", \
+        "url": "http://news.google.com/news?ned=us&topic=w&output=rss", \
+        "update_rate": 900000 \
+        } \
+    ] \
+  } \
+}' 
+
+
+curl -XGET 'http://localhost:9200/googlenews/_search?q=romney'
+
+
+In R
+library(RJSONIO)
+library(RCurl)
+
+o = fromJSON(getForm('http://localhost:9200/googlenews/_search', q = 'egypt'))
+
+
+rssRiver("http://rss.gmane.org/topics/excerpts/gmane.comp.lang.r.general", "rhelp", verbose = TRUE)
+
+rssRiver("http://rss.gmane.org/topics/excerpts/gmane.comp.lang.r.devel", "rdevel")
+
+
+# All the R-mailing list RSS feeds are at http://dir.gmane.org/index.php?prefix=gmane.comp.lang.r
+# We can add a river for each.
+
+

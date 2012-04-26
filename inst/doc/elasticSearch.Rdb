@@ -1,0 +1,452 @@
+<?xml version="1.0"?>
+<article xmlns:r="http://www.r-project.org"
+         xmlns:xi="http://www.w3.org/2003/XInclude">
+
+  <!-- 
+  How to load data in ElasticSearch.  SpamAssassin.
+    Inserting as JSON.
+
+  What about the river from rhelp or twitter
+
+  Query results as JSON
+
+  Input for query as JSON
+    Search as a simple query or as a JSON document for advanced search.
+         http://www.elasticsearch.org/guide/reference/api/search/
+   -->
+
+<section>
+<title>Searching Text</title>
+
+<para>
+In this section, we'll look at using a local text search engine
+named ElasticSearch, which is based on Lucene.
+We'll  see how we can query its contents and get the results
+as <json/>.  We'll also see how to specify more complex queries
+using <json/> as input. 
+We can also populate the text  engine with <json/>
+documents, and we'll show how we can do this from <r/>
+using regular <r/> objects.
+</para>
+
+
+
+<para>
+We are increasingly interested in working with text as data.  We build
+classifiers for detecting spam e-mail messages.  We look for trends in
+tweets posted on <twitter/>.  We analyze <html/> documents, news
+articles, blogs, reader comments and reviews, scientific abstracts and
+papers, and so on.  Often we have structured information in addition
+to the free-form text.  For example, a tweet has the author, the date
+and time as well as the text.  An email message has information in the
+header such as the sender, the recipients, the date, subject.  When
+analyzing this data, we sometimes want to search and filter the
+"documents" to find matches and then work with the resulting
+structured data.  We can perform these matches in <r/> using the
+collection of regular expressions functions.  This is quite efficient
+and involves a little bit of programming depending on how the
+"documents" are stored, e.g.  as a list of header, body and list of
+attachments for an email message.
+</para>
+<para>
+For some projects, however, it is more appropriate to use a search
+engine for managing and querying the documents.  We could use a
+database such as <couchdb/> or <mongodb/>.  We could also use an
+actual text search engine such as <lucene/> designed specifically for
+this task which offers several additional features such as faceted
+search and flexible scoring for relevance and not simply text
+matching.  These can also deal with streaming data that continues to
+arrive and which we can search dynamically.  Both <solr/> and
+<elasticsearch/> are very flexible <json/> and REST-based applications
+that sit on top of <lucene/> and provide facilities to insert, query
+and generally work with structured text documents.  Documents can be
+inserted in <json/> format and queries to find, update and delete
+documents return the results as <json/> content.  Both systems work
+well with large collections of documents and are
+distributed. Similarly, both handle various different types of
+documents, e.g. emails, word processing files, PDF documents,
+tweets. One can customize and extend both via configuration details or
+via plugins written in <java/>.  <elasticsearch/> is, apparently,
+designed to scale very well with large collections of documents.  Both
+provide a tool that might be valuable for use with <r/> and the
+<rest/> interface makes it quite easy to work with these search
+engines from <r/> with little work.  There is an opportunity for an
+<r/> programmer to develop an interface to either of these
+applications.  In this section, we'll discuss how one might go about
+developing such an interface for <elasticsearch/>.
+</para>
+<para>
+Before we start with the <r/> code, it is important to outline 
+a few fundamental concepts underlying <elasticsearch/>.
+The <es/> model uses an index as a top-level container.
+It is similar to a database. 
+Within an index, we have one or more types.
+A type corresponds to a table in a database.
+This might be an email message or a tweet.
+In our examples, we'll have a single type and
+many instances of that type. These instances 
+are <emphasis>documents</emphasis> and this is a key concept in 
+<lucene/> and <elasticsearch/>. A document is essentially
+an observation or row in a table.
+This might be an instance of a tweet or an email message.
+A document has fields such as the author and date
+of a tweet, or the header and body of an email message.
+</para>
+<para>
+We can create an index and any types and then insert
+documents.  <lucene/> will ingest and index them for us
+so that it can search the documents and the fields 
+efficiently.  It does a lot of processing such as
+tokenizing, e.g. to break text into words or recognize
+URLs or email addresses; stemming of words and so on.
+(All of these steps can be controlled and customized.)
+<es/> recognizes the fields and their types automatically,
+e.g. detecting strings, numbers and dates. However, we can
+also explicitly specify the types for fields. This corresponds
+to a schema for the documents.
+</para>
+
+
+<para>
+Before we turn to our data, let's discuss getting and running
+elastic search.
+Firstly, download the elastic search code from 
+<ulink url="http://www.elasticsearch.org/download/"/>.
+Extract the files from this archive (i.e. zip or tar.gz file).
+This will create a directory named something like
+<dir>elasticsearch-0.18.7</dir>. Within this directory,
+you will find the application <file>elasticsearch</file> within the <dir>bin</dir> directory.
+You can just run this, e.g.
+<sh:code>
+./elasticsearch-0.18.7/bin/elasticsearch -f
+</sh:code>
+The flag "-f" causes this to run in the foreground and write messages on the console.
+This allows us to watch what the elastic search server is doing.
+That's it - the elastic search engine is up and running.
+</para>
+
+
+<para>
+We'll explore two examples - email messages and RSS feeds. 
+The first deals with email messages.  We
+have converted the Spam Assassin corpus of approximately nine thousand
+email messages into R objects. Each message is in the form of a list
+with elements named <r:var>header</r:var>, <r:var>body</r:var> and
+<r:var>attachments</r:var>. The attachments is only present if the
+message actually has attachments.  The body is a <r:character/> vector
+consisting of the lines of the body of the message.
+We'll load each message into <es/>. Then we will be able to search
+based on some query strings and then extract different fields for the matching
+in a single operation.
+</para>
+<para>
+<invisible>
+<r:code>
+load("SpamAssassinTest.rda")
+</r:code>
+</invisible>
+The list of messages is in the <r/> variable <r:var>msgs</r:var>
+For each message, we want to use <r:func>httpPUT</r:func>
+to explicitly insert the document.
+The URL for the document is 
+<ulink url="http://localhost:9200/spamassassin/message/num"/>
+where num is replaced by a unique identifier for the message.
+We'll just use the numbers 1, 2, ....
+The "spamassassin" in the URL is the index;
+the "message" is the type.
+</para>
+<para>
+We convert the document from an <r/> object to <json/>
+very simply. We convert the body into a single string
+and then convert the <r:list/> using <r:func>toJSON</r:func>.
+We can do all of this with
+<r:function><![CDATA[
+insertMsg = 
+function(msg, id) {
+  msg$body = paste(msg$body, collapse = "\n")
+  url = sprintf("http://localhost:9200/spamassassin/message/%d", id)
+  httpPUT(url, toJSON(msg))
+}         
+
+]]></r:function>
+That's all we need for one message and so we can insert them all
+with
+<r:code>
+mapply(insertMsg, msgs, seq(along = msgs))
+</r:code>
+Note that there is a more efficient way to load the entire collection
+of documents in "bulk". It still requires the conversion to <json/>, however.
+</para>
+<para>
+Of course, our <r:func>insertMsg</r:func> function is very specific to
+the email messages we are processing. The index and type are hard-coded
+as is the location of the <es/> server.
+We can write a general function for inserting a document into
+an <es/> server. It takes the <r/> object that corresponds to the 
+<es/> document, and the server, index and type. 
+Since we often work with a given server, index and type and all its documents
+across several tasks, it makes sense to represent this triple as an object.
+We can define a class <r:class>ElasticSearchServerIndexType</r:class> which
+contains information about the location of the server and the
+index and the type. For instance, we can define the following class
+for the server information  
+<r:code>
+setClass("ElasticSearchServer",
+           representation(host = "character",
+                          port = "integer"),
+           prototype = prototype(host = "localhost", port = 9200L))
+</r:code>
+and another for the triple
+<r:code>
+setClass("ElasticSearchServerIndexType",
+          representation(server = "ElasticSearchServer",
+                         index = "character",
+                         type = "character"))
+</r:code>
+In the our prototype we have an extra intermediate class
+for representing an index without the type and extend this class to add a type slot when
+defining <r:class>ElasticSearchServerIndexType</r:class>.
+This code can be found at <ulink url=""/>
+</para>
+<para>
+The primary use of the <r:class>ElasticSearchServerIndexType</r:class>
+class is to generate the appropriate URL for the requests.
+This is the prefix for operations on the documents such as 
+insertions and searches.
+So let's define a class <r:class>URI</r:class> which is a simple
+string and then define a method to coerce 
+an <r:class>ElasticSearchServerIndexType</r:class> instance
+to that class:
+<r:code>
+setClass("URI", contains = 'character')
+</r:code>
+<r:code>
+setAs("ElasticSearchServerIndexType", "URI",
+       function(from) {
+         sprintf("%s/%s/%s",  as(from@server, "URI"), from@index, from@type)
+       })
+</r:code>
+This assumes a similar method for coercing <r:class>ElasticSearchServer</r:class>
+to a <r:class>URI</r:class> object. (See the prototype for more specific details.)
+</para>
+<para>
+With these classes and methods we are able to generalize our 
+insertion function. We'll define a generic function and then some methods:
+<r:function><![CDATA[
+setGeneric("insertES",
+  function(to, id, value, ...)
+    standardGeneric("insertES"))
+]]></r:function>
+The method for our <r:class>ElasticSearchServerIndexType</r:class> class
+can be defined as
+<r:function><![CDATA[
+setMethod("insertES", c("ElasticSearchServerIndexType"),
+           function(to = new("ElasticSearchServer"), value, id, index,  ...) {
+             url = sprintf("%s/%s", as(to, "URI"), id)
+             httpPUT(url, toJSON(value))
+           })
+]]></r:function>
+This is a much more general and simple function. The call to
+<r:func>sprintf</r:func> could also be made simpler and more general
+by having a function that performs the coercion and appends 
+the remainder of the URI. So for this we write a function
+<r:func>asURI</r:func>.  Again we can define methods, but the catch-all one is
+<r:function><![CDATA[
+setMethod("asURI", "ANY",
+           function(obj, path) {
+             sprintf("%s/%s", as(obj, "URI"), as(path, "character"))
+           })
+]]></r:function>
+Now we can write our  <r:func>insertES</r:func> function as
+<r:function><![CDATA[
+setMethod("insertES", c("ElasticSearchServerIndexType"),
+           function(to = new("ElasticSearchServer"), value, id, index,  ...) {
+             url = asURI(to, id)
+             httpPUT(url, toJSON(value))
+           })
+]]></r:function>
+This delegates the generation of the URL to
+the relevant coercion method for the <r:arg>to</r:arg> 
+and this allows us to specify different <r:func>as</r:func> methods for different
+classes of <r:arg>to</r:arg>.
+</para>
+<para>
+Defining these classes and methods would not be very efficient use of our time
+unless we use them in other contexts. However, we can use the same programming
+pattern for defining methods for many operations to interact with 
+<es/>.
+</para>
+
+
+<para>
+Now that we have loaded the messages into <es/>, we can reap the rewards
+and search them.
+<es/> provides a URL for performing search that we can query
+via a <rest/> request. The URL is the given as index/type/_search,
+e.g.
+<ulink url="http://localhost:9200/spamassassin/message/_search"/>.
+We can pass the query string and other arguments to this request by treating this as a form.
+The primary argument is 'q' for the  query string. We can also specify the 
+maximum number of items to return, one or more fields to return from the matching documents
+and so on.
+We'll create an <r/> object to refer to the spamassassin/message type 
+<r:code>
+sp = new("ElasticSearchServerIndexType", index = "spamassassin", 
+           type = "message")
+</r:code>
+We can perform the search for messages containing the string "DVDs" with 
+<r:code>
+u = asURI(as(sp, "URI"), "_search")
+ans = getForm(u, q = "DVDs")
+</r:code>
+The result in <r:var>ans</r:var> is a <json/> string. So we can convert that
+to R with 
+<r:code>
+qresult = fromJSON(ans)
+</r:code>
+This is a list with 4 elements; the actual results are in the element named "hits"
+and then the element "hits" within that also.
+Each element of this list is a result and gives details about the matching document.
+We can see its contents with
+<r:code>
+names(qresult$hits$hits[[1]])
+<r:output><![CDATA[
+[1] "_index"  "_type"   "_id"     "_score"  "_source"
+]]></r:output>
+</r:code>
+The "_source" element is the actual document and that is one of the email
+messages that we inserted into the search engine.
+This has a header and body and the body does indeed contain the term "DVDs".
+</para>
+<para>
+We could limit the 
+</para>
+
+
+<section>
+<title>Streaming Data: RSS Feeds</title>
+<para>
+<es/> has a powerful feature that allows us to collect
+"documents" via a feed of data, or a <emphasis>river</emphasis>.
+The river might be an email or twitter account, an
+RSS feed, or a database such as CouchDB server.
+Let's explore an RSS feed. 
+This might be the r-help mailing list which is
+syndicated at 
+<ulink url="http://rss.gmane.org/topics/excerpts/gmane.comp.lang.r.general"/>
+or Google news
+available at 
+<ulink url="http://news.google.com/news?output=rss"/>
+(along with additional parameters to filter/narrow the content).
+We'll look at Google News.
+By connecting our <es/> server to the RSS feed, 
+the river will periodically
+query the RSS feed and insert new items in the RSS feed 
+as separate documents in the river's index.
+</para>
+<para>
+To create a river, we first create the index using the river's name.
+Then we specify any schema information for the page.
+Finally we specify meta-data describing the river, 
+in this case the RSS feed, i.e. the URL for the feed,
+how often to query and update the information from the feed.
+We communicate with the <es/> server via <omg:pkg>RCurl</omg:pkg>
+and HTTP requests, using its REST interface.
+
+</para>
+<para>
+Now that we have established the river, we can query it.
+Let's look for items containing Obama and Romney.
+<r:code>
+o = getForm('http://localhost:9200/googlenews/_search', 
+              q = 'Obama Romney', size = '10000',
+              default_operator = "OR")
+</r:code>
+We now convert this from <json/> to <r/>
+<r:code>
+ans = fromJSON(o)
+</r:code>
+
+We can explore this object now in <r/>.  It is a list with information
+about the matching documents (the "hits"), and other information about
+how long <es/> took to process the request, whether the request timed
+out or not, how many shards were successfully queried.  We want the
+documents that matched the query which is
+<r:expr>ans$hits$hits</r:expr>.  This is a list with many
+elements<footnote><para>The actual number of hits will depend on the
+actual items in the RSS feed at the time.</para></footnote> Each
+element is a list with elements named
+
+<r:output><![CDATA[
+[1] "_index"  "_type"   "_id"     "_score"  "_source"
+]]></r:output>
+The _score gives us a relative indication of the quality
+of the match.
+The _source gives information about the matching document.
+In this case, it contains elements named
+<r:output><![CDATA[
+[1] "feedname"      "title"         "author"        "description"  
+[5] "link"          "publishedDate" "source"        "river"        
+]]></r:output>
+The first element in our search is 
+<r:output><![CDATA[
+$feedname
+[1] "googlenews"
+
+$title
+[1] "Mitt Romney wins backing of Donald Trump ahead of Nevada caucuses - The Guardian"
+
+$author
+[1] ""
+
+$description
+[1] <TABLE>....</TABLE>
+
+$link
+[1] "http://news.google.com/news/url?sa=t&fd=R&usg=AFQjCNHFCEKFCRZZNxTCbs53pdAltX45PA&url=http://www.guardian.co.uk/world/2012/feb/02/mitt-romney-wins-donald-trump-backing?newsfeed%3Dtrue"
+
+$publishedDate
+[1] "2012-02-02T22:05:32.000Z"
+
+$source
+NULL
+
+$river
+[1] "googlenews"
+]]></r:output>
+</para>
+<para>
+I'm curious about which news sources are referenced.
+To get these, we obtain the "link" element in each
+"_source" entry of each hit entry.
+These look something like
+<programlisting><![CDATA[
+"http://news.google.com/news/url?sa=t&fd=R&usg=AFQ
+  &url=http://www.guardian.co.uk/world/2012/feb/02/mitt-romney-wins-donald-trump-backing?newsfeed%3Dtrue"
+]]></programlisting>
+We want the text that is the value of the "url" parameter, i.e..
+ http://www.guardian.co.uk/world/...
+We can get this for each document with 
+the function
+<r:function><![CDATA[
+getSubURL =
+function(u)
+{
+  gsub(".*&url=([^&]+)(&|$)", "\\1", u)
+}
+]]></r:function>
+(We could also do this more robustly using
+<r:func>parseURI</r:func>.)
+
+
+<r:code>
+a= sapply(ans$hits$hits, 
+            function(x) 
+              getSubURL(x$'_source'$link))
+
+</r:code>
+</para>
+</section>
+
+</section>
+</article>
