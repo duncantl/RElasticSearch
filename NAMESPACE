@@ -1,0 +1,14 @@
+import(RJSONIO)
+import(RCurl)
+
+exportClasses()
+export(rssRiver)
+exportClasses(ElasticSearchServer,
+              ElasticSearchServerIndex,
+              ElasticSearchServerIndexType,              
+              ElasticSearchRiver)
+
+exportMethods(searchES, query,
+              getES, insertES,
+              length, deleteIndex, getMapping, getSettings, names, "[")
+              
